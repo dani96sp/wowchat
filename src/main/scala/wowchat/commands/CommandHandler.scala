@@ -45,6 +45,14 @@ object CommandHandler extends StrictLogging {
             }
             whoSucceeded
           })
+        case "armory" =>
+          Global.game.fold({
+            fromChannel.sendMessage(NOT_ONLINE).queue()
+            return true
+          })(game => {
+            val armorySucceeded = game.handleArmory()
+            armorySucceeded
+          })
         case "gmotd" =>
           Global.game.fold({
             fromChannel.sendMessage(NOT_ONLINE).queue()

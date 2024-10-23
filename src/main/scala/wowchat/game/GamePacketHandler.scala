@@ -110,6 +110,20 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
       .mkString(getGuildiesOnlineMessage(false), ", ", "")
   }
 
+  def buildGuildiesOnlineArmory: String = {
+    val characterName = Global.config.wow.character
+
+    guildRoster
+      .valuesIterator
+      .filter(guildMember => guildMember.isOnline && !guildMember.name.equalsIgnoreCase(characterName))
+      .toSeq
+      .sortBy(_.name)
+      .map(m => {
+        s"https://armory.warmane.com/character/${m.name}/Icecrown/summary"
+      })
+      .mkString(getGuildiesOnlineMessage(false), "\n", "")
+  }
+
   def getGuildiesOnlineMessage(isStatus: Boolean): String = {
     val size = guildRoster.count(_._2.isOnline) - 1
     val guildies = s"guildie${if (size != 1) "s" else ""}"
@@ -193,6 +207,9 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
     } else {
       Some(buildGuildiesOnline)
     }
+  }
+  override def handleArmory(): Option[String] = {
+    Some(buildGuildiesOnlineArmory)
   }
 
   override def handleGmotd(): Option[String] = {
