@@ -7,6 +7,7 @@ import io.netty.channel.EventLoopGroup
 import net.dv8tion.jda.api.entities.TextChannel
 import wowchat.discord.Discord
 import wowchat.game.GameCommandHandler
+import wowchat.game.GoldPickerHandler
 
 import scala.collection.mutable
 
@@ -16,7 +17,7 @@ object Global {
   var config: WowChatConfig = _
 
   var discord: Discord = _
-  var game: Option[GameCommandHandler] = None
+  var game: Option[GameCommandHandler with GoldPickerHandler] = None
 
   val discordToWow = new mutable.HashMap[String, mutable.Set[WowChannelConfig]]
     with mutable.MultiMap[String, WowChannelConfig]

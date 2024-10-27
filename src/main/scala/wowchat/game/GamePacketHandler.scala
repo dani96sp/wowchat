@@ -2,7 +2,7 @@ package wowchat.game
 
 import java.nio.charset.Charset
 import java.security.MessageDigest
-import java.util.concurrent.{Executors, TimeUnit}
+import java.util.concurrent.{Executors, TimeUnit, ScheduledFuture}
 
 import wowchat.common._
 import wowchat.game.warden.{WardenHandler, WardenPackets}
@@ -24,7 +24,20 @@ case class CharEnumMessage(name: String, guid: Long, race: Byte, guildGuid: Long
 case class GuildInfo(name: String, ranks: Map[Int, String])
 
 class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte], gameEventCallback: CommonConnectionCallback)
-  extends ChannelInboundHandlerAdapter with GameCommandHandler with GamePackets with StrictLogging {
+  extends ChannelInboundHandlerAdapter with GameCommandHandler with GamePackets with GoldPickerHandler with StrictLogging {
+
+  protected var lastTradeGoldAmount: Int = 0
+  protected var lastTradePlayerGuid: Long = 0
+  protected var lastTradePlayerName: Option[String] = None
+
+  private var _isGoldPickerActive: Boolean = false
+
+  private val random = new Random()
+  override def isGoldPickerActive: Boolean = _isGoldPickerActive
+  private var goldPickerFuture: Option[ScheduledFuture[_]] = None
+  private var goldPickerMessage: String = "can you give me some gold for spells and riding pls im new here"
+  private var goldPickerMinDelay: Int = 44
+  private var goldPickerMaxDelay: Int = 131
 
   protected val addonInfo: Array[Byte] = Array(
     0x56, 0x01, 0x00, 0x00, 0x78, 0x9C, 0x75, 0xCC, 0xBD, 0x0E, 0xC2, 0x30, 0x0C, 0x04, 0xE0, 0xF2,
@@ -50,6 +63,7 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
   protected val guildRoster = mutable.Map.empty[Long, GuildMember]
   protected var lastRequestedGuildRoster: Long = _
   protected val executorService = Executors.newSingleThreadScheduledExecutor
+  protected val executorServiceShortTasks = Executors.newSingleThreadScheduledExecutor
 
   // cannot use multimap here because need deterministic order
   private val queuedChatMessages = new mutable.HashMap[Long, mutable.ListBuffer[ChatMessage]]
@@ -58,6 +72,7 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
 
   override def channelInactive(ctx: ChannelHandlerContext): Unit = {
     executorService.shutdown()
+    executorServiceShortTasks.shutdown()
     this.ctx = None
     gameEventCallback.disconnected
     Global.game = None
@@ -240,6 +255,7 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
     this.ctx = Some(ctx)
     Global.game = Some(this)
     runPingExecutor
+    runAutoSayExecutor
   }
 
   override def channelRead(ctx: ChannelHandlerContext, msg: scala.Any): Unit = {
@@ -269,6 +285,9 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
       case SMSG_INVALIDATE_PLAYER => handle_SMSG_INVALIDATE_PLAYER(msg)
 
       case SMSG_WARDEN_DATA => handle_SMSG_WARDEN_DATA(msg)
+
+      case SMSG_TRADE_STATUS => handle_SMSG_TRADE_STATUS(msg)
+      case SMSG_TRADE_STATUS_EXTENDED => handle_SMSG_TRADE_STATUS_EXTENDED(msg)
 
       case unhandled =>
     }
@@ -339,6 +358,11 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
 
   private def handle_SMSG_NAME_QUERY(msg: Packet): Unit = {
     val nameQueryMessage = parseNameQuery(msg)
+
+    if (nameQueryMessage.guid == lastTradePlayerGuid) {
+      lastTradePlayerName = Some(nameQueryMessage.name)
+      logger.info(s"[Trade] Nombre del jugador del trade: ${nameQueryMessage.name}")
+    }
 
     queuedChatMessages
       .remove(nameQueryMessage.guid)
@@ -797,5 +821,143 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
 
   protected def initializeWardenHandler: WardenHandler = {
     new WardenHandler(sessionKey)
+  }
+
+  override def setGoldPickerMessage(message: String): Unit = {
+    goldPickerMessage = message
+  }
+
+  override def setGoldPickerMinDelay(delay: Int): Unit = {
+    goldPickerMinDelay = delay
+  }
+
+  override def setGoldPickerMaxDelay(delay: Int): Unit = {
+    goldPickerMaxDelay = delay
+  }
+
+  override def getGoldPickerMinDelay(): Int = {
+    goldPickerMinDelay
+  }
+
+  override def getGoldPickerMaxDelay(): Int = {
+    goldPickerMaxDelay
+  }
+
+  override def getGoldPickerMessage(): String = {
+    goldPickerMessage
+  }
+
+  override def getGoldPickerStatus: String = {
+    s"""GoldPicker está ${if (isGoldPickerActive) "activo" else "inactivo"}.
+       |Mensaje actual: $goldPickerMessage
+       |Delay mínimo: $goldPickerMinDelay segundos
+       |Delay máximo: $goldPickerMaxDelay segundos""".stripMargin
+  }
+
+  override def startGoldPicker(): Unit = {
+    stopGoldPicker() // Asegurarse de que no haya una tarea previa en ejecución
+    _isGoldPickerActive = true
+    goldPickerFuture = Some(runAutoSayExecutor)
+  }
+
+  override def stopGoldPicker(): Unit = {
+    _isGoldPickerActive = false
+    goldPickerFuture.foreach(_.cancel(false))
+    goldPickerFuture = None
+  }
+
+  private def runAutoSayExecutor: ScheduledFuture[_] = {
+    def scheduleNextMessage(): ScheduledFuture[_] = {
+      val delay = random.nextInt(goldPickerMaxDelay - goldPickerMinDelay + 1) + goldPickerMinDelay
+      executorService.schedule(new Runnable {
+        override def run(): Unit = {
+          if (inWorld && isGoldPickerActive) {
+            sendSayMessage(goldPickerMessage)
+            goldPickerFuture = Some(scheduleNextMessage())
+          }
+        }
+      }, delay, TimeUnit.SECONDS)
+    }
+
+    scheduleNextMessage()
+  }
+
+  private def sendSayMessage(message: String): Unit = {
+    ctx.foreach { ctx =>
+      val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(200, 400)
+      byteBuf.writeIntLE(ChatEvents.CHAT_MSG_SAY)
+      byteBuf.writeIntLE(languageId)
+      byteBuf.writeBytes(message.getBytes("UTF-8"))
+      byteBuf.writeByte(0)
+      ctx.writeAndFlush(Packet(CMSG_MESSAGECHAT, byteBuf))
+    }
+  }
+
+
+  private def handle_SMSG_TRADE_STATUS(msg: Packet): Unit = {
+    val id = msg.byteBuf.readByte
+    logger.info(s"[Trade][IN] SMSG_TRADE_STATUS $id")
+
+    if (id == 1) { // Contestamos al inicio del trade "iniciando" el trade desde nuestro cliente también
+      msg.byteBuf.skipBytes(3)
+      lastTradePlayerGuid = msg.byteBuf.readLongLE()
+      logger.info(s"[Trade] Trade iniciado por GUID: $lastTradePlayerGuid")
+      sendNameQuery(lastTradePlayerGuid)
+
+      logger.info("[Trade][OUT] CMSG_BEGIN_TRADE")
+      ctx.get.writeAndFlush(Packet(CMSG_BEGIN_TRADE))
+    }
+    if (id == 4) { // Cuando aceptan el trade, enviamos el packet de aceptar también nosotros
+      val delaySeconds = Random.nextInt(3) + 1 // Genera un número aleatorio entre 1 y 3
+      logger.info(s"[Trade] Trade aceptado por la otra parte. Esperando $delaySeconds segundos antes de aceptar.")
+
+      executorServiceShortTasks.schedule(new Runnable {
+        override def run(): Unit = {
+          logger.info("[Trade][OUT] CMSG_ACCEPT_TRADE")
+          val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(8, 8)
+          byteBuf.writeIntLE(0x07.toByte)
+          ctx.get.writeAndFlush(Packet(CMSG_ACCEPT_TRADE, byteBuf))
+        }
+      }, delaySeconds, TimeUnit.SECONDS)
+    }
+    if (id == 8) { // Trade completado correctamente
+      // Replicamos lo que hace el cliente de wow
+      ctx.get.writeAndFlush(Packet(CMSG_CANCEL_TRADE))
+      ctx.get.writeAndFlush(Packet(CMSG_CANCEL_TRADE))
+      ctx.get.writeAndFlush(Packet(CMSG_CANCEL_TRADE))
+
+      // Anunciar el oro recibido en Discord
+      if (lastTradeGoldAmount > 0) {
+        val playerName = lastTradePlayerName.getOrElse("Jugador desconocido")
+        val formattedGold = formatGold(lastTradeGoldAmount)
+        val message = s"Trade completado con $playerName. Oro recibido: $formattedGold"
+        Global.discord.sendMessageFromWow(None, message, ChatEvents.CHAT_MSG_OFFICER, None)
+        lastTradeGoldAmount = 0 // Reiniciar el valor después de anunciarlo
+        lastTradePlayerName = None // Reiniciar el nombre del jugador
+      }
+    }
+  }
+
+  private def handle_SMSG_TRADE_STATUS_EXTENDED(msg: Packet): Unit = {
+    msg.byteBuf.skipBytes(13) // skip hasta el oro
+
+    val gold = msg.byteBuf.readIntLE
+    logger.info(s"[SMSG_TRADE_STATUS_EXTENDED][IN] GOLD: $gold")
+
+    lastTradeGoldAmount = gold // Actualizar la variable global
+  }
+
+  private def formatGold(amount: Int): String = {
+    val gold = amount / 10000
+    val silver = (amount % 10000) / 100
+    val copper = amount % 100
+
+    val parts = Seq(
+      if (gold > 0) s"${gold}g" else "",
+      if (silver > 0) s"${silver}s" else "",
+      if (copper > 0) s"${copper}c" else ""
+    ).filter(_.nonEmpty)
+
+    parts.mkString(" ")
   }
 }

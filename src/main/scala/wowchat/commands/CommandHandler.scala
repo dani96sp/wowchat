@@ -21,6 +21,69 @@ object CommandHandler extends StrictLogging {
   // gross. rewrite
   var whoRequest: WhoRequest = _
 
+  private def handleGoldPicker(args: Array[String], messageChannel: MessageChannel): Unit = {
+    val game = Global.game.getOrElse {
+      messageChannel.sendMessage("No hay conexión al juego actualmente.").queue()
+      return
+    }
+
+    if (args.isEmpty) {
+      sendGoldPickerHelp(messageChannel)
+      return
+    }
+
+    args(0).toLowerCase match {
+      case "on" =>
+        game.startGoldPicker()
+        messageChannel.sendMessage("GoldPicker ha sido activado.").queue()
+      case "off" =>
+        game.stopGoldPicker()
+        messageChannel.sendMessage("GoldPicker ha sido desactivado.").queue()
+      case "status" =>
+        messageChannel.sendMessage(game.getGoldPickerStatus).queue()
+      case "msg" =>
+        if (args.length < 2) {
+          messageChannel.sendMessage("Por favor, proporciona un mensaje.").queue()
+        } else {
+          val newMessage = args.tail.mkString(" ")
+          game.setGoldPickerMessage(newMessage)
+          messageChannel.sendMessage(s"Mensaje de GoldPicker actualizado a: $newMessage").queue()
+        }
+      case "mindelay" =>
+        if (args.length < 2 || !args(1).forall(_.isDigit) || args(1).toInt < 10) {
+          messageChannel.sendMessage("Por favor, proporciona un número válido para el delay mínimo. Valor mínimo 10s.").queue()
+        } else {
+          val newDelay = args(1).toInt
+          game.setGoldPickerMinDelay(newDelay)
+          messageChannel.sendMessage(s"Delay mínimo de GoldPicker actualizado a $newDelay segundos.").queue()
+        }
+      case "maxdelay" =>
+        if (args.length < 2 || !args(1).forall(_.isDigit) || args(1).toInt < game.getGoldPickerMinDelay()) {
+          messageChannel.sendMessage("Por favor, proporciona un número válido para el delay máximo.").queue()
+        } else {
+          val newDelay = args(1).toInt
+          game.setGoldPickerMaxDelay(newDelay)
+          messageChannel.sendMessage(s"Delay máximo de GoldPicker actualizado a $newDelay segundos.").queue()
+        }
+      case "help" | _ =>
+        sendGoldPickerHelp(messageChannel)
+    }
+  }
+
+  private def sendGoldPickerHelp(messageChannel: MessageChannel): Unit = {
+    val helpMessage = """
+                        |Uso del comando GoldPicker:
+                        |?goldpicker on - Activa GoldPicker
+                        |?goldpicker off - Desactiva GoldPicker
+                        |?goldpicker status - Muestra el estado actual de GoldPicker
+                        |?goldpicker msg <mensaje> - Establece el mensaje de GoldPicker
+                        |?goldpicker mindelay <num> - Establece el mínimo valor de delay en segundos
+                        |?goldpicker maxdelay <num> - Establece el máximo valor de delay en segundos
+                        |?goldpicker help - Muestra este mensaje de ayuda
+    """.stripMargin
+    messageChannel.sendMessage(helpMessage).queue()
+  }
+
   // returns back the message as an option if unhandled
   // needs to be refactored into a Map[String, <Intelligent Command Handler Function>]
   def apply(fromChannel: MessageChannel, message: String): Boolean = {
@@ -31,6 +94,9 @@ object CommandHandler extends StrictLogging {
     val splt = message.substring(trigger.length).split(" ")
     val possibleCommand = splt(0).toLowerCase
     val arguments = if (splt.length > 1 && splt(1).length <= 16) Some(splt(1)) else None
+    val args = splt.slice(1, splt.length)
+
+    logger.info(s"Command received: $message")
 
     Try {
       possibleCommand match {
@@ -58,6 +124,14 @@ object CommandHandler extends StrictLogging {
             fromChannel.sendMessage(NOT_ONLINE).queue()
             return true
           })(_.handleGmotd())
+        case "goldpicker" =>
+          Global.game.fold({
+            fromChannel.sendMessage(NOT_ONLINE).queue()
+            return true
+          })(game => {
+            handleGoldPicker(args, fromChannel)
+            return true
+          })
       }
     }.fold(throwable => {
       // command not found, should send to wow chat
