@@ -1,3 +1,8 @@
+2025-02-07 - v1.4.0
++ Added ?autoflood command
++ Added ?goldpicker command
++ Added ?armory command
+
 2022-02-20 - v1.3.8
 + Updates to used libraries.
 + Added build hashes and support for more 1.x vanilla builds.
