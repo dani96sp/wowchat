@@ -24,7 +24,7 @@ case class CharEnumMessage(name: String, guid: Long, race: Byte, guildGuid: Long
 case class GuildInfo(name: String, ranks: Map[Int, String])
 
 class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte], gameEventCallback: CommonConnectionCallback)
-  extends ChannelInboundHandlerAdapter with GameCommandHandler with GamePackets with GoldPickerHandler with StrictLogging {
+  extends ChannelInboundHandlerAdapter with GameCommandHandler with GamePackets with GoldPickerHandler with AutoFloodHandler with StrictLogging {
 
   protected var lastTradeGoldAmount: Int = 0
   protected var lastTradePlayerGuid: Long = 0
@@ -38,6 +38,14 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
   private var goldPickerMessage: String = "can you give me some gold for spells and riding pls im new here"
   private var goldPickerMinDelay: Int = 44
   private var goldPickerMaxDelay: Int = 131
+
+  // AutoFlood variables
+  private var _isAutoFloodActive: Boolean = false
+  override def isAutoFloodActive: Boolean = _isAutoFloodActive
+  private var autoFloodFuture: Option[ScheduledFuture[_]] = None
+  private var autoFloodMessage: String = ""
+  private var autoFloodDelay: Int = 60
+  private var autoFloodChannels: Set[String] = Set.empty
 
   protected val addonInfo: Array[Byte] = Array(
     0x56, 0x01, 0x00, 0x00, 0x78, 0x9C, 0x75, 0xCC, 0xBD, 0x0E, 0xC2, 0x30, 0x0C, 0x04, 0xE0, 0xF2,
@@ -893,6 +901,85 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
     }
   }
 
+  // AutoFlood methods
+  def setAutoFloodMessage(message: String): Unit = {
+    autoFloodMessage = message
+  }
+
+  def setAutoFloodDelay(delay: Int): Unit = {
+    autoFloodDelay = delay
+  }
+
+  def setAutoFloodChannels(channels: Set[String]): Unit = {
+    autoFloodChannels = channels
+  }
+
+  def getAutoFloodStatus: String = {
+    s"""AutoFlood está ${if (_isAutoFloodActive) "activo" else "inactivo"}.
+       |Mensaje actual: $autoFloodMessage
+       |Delay: $autoFloodDelay segundos
+       |Canales: ${if (autoFloodChannels.isEmpty) "ninguno" else autoFloodChannels.mkString(", ")}""".stripMargin
+  }
+
+  def startAutoFlood(): Unit = {
+    stopAutoFlood() // Asegurarse de que no haya una tarea previa en ejecución
+    if (autoFloodMessage.isEmpty || autoFloodChannels.isEmpty) {
+      logger.warn("No se puede iniciar AutoFlood: mensaje o canales no configurados")
+      return
+    }
+    _isAutoFloodActive = true
+    autoFloodFuture = Some(runAutoFloodExecutor)
+  }
+
+  def stopAutoFlood(): Unit = {
+    _isAutoFloodActive = false
+    autoFloodFuture.foreach(_.cancel(false))
+    autoFloodFuture = None
+  }
+
+  private def runAutoFloodExecutor: ScheduledFuture[_] = {
+    def scheduleNextMessage(): ScheduledFuture[_] = {
+      executorService.schedule(new Runnable {
+        override def run(): Unit = {
+          if (inWorld && _isAutoFloodActive) {
+            autoFloodChannels.foreach(channel => {
+              channel.toLowerCase match {
+                case "yell" => sendYellMessage(autoFloodMessage)
+                case "say" => sendSayMessage(autoFloodMessage)
+                case channelId => sendChannelMessage(autoFloodMessage, channelId)
+              }
+            })
+            autoFloodFuture = Some(scheduleNextMessage())
+          }
+        }
+      }, autoFloodDelay, TimeUnit.SECONDS)
+    }
+    scheduleNextMessage()
+  }
+
+  private def sendYellMessage(message: String): Unit = {
+    ctx.foreach { ctx =>
+      val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(200, 400)
+      byteBuf.writeIntLE(ChatEvents.CHAT_MSG_YELL)
+      byteBuf.writeIntLE(languageId)
+      byteBuf.writeBytes(message.getBytes("UTF-8"))
+      byteBuf.writeByte(0)
+      ctx.writeAndFlush(Packet(CMSG_MESSAGECHAT, byteBuf))
+    }
+  }
+
+  private def sendChannelMessage(message: String, channelName: String): Unit = {
+    ctx.foreach { ctx =>
+      val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(200, 400)
+      byteBuf.writeIntLE(ChatEvents.CHAT_MSG_CHANNEL)
+      byteBuf.writeIntLE(languageId)
+      byteBuf.writeBytes(channelName.getBytes("UTF-8"))
+      byteBuf.writeByte(0)
+      byteBuf.writeBytes(message.getBytes("UTF-8"))
+      byteBuf.writeByte(0)
+      ctx.writeAndFlush(Packet(CMSG_MESSAGECHAT, byteBuf))
+    }
+  }
 
   private def handle_SMSG_TRADE_STATUS(msg: Packet): Unit = {
     val id = msg.byteBuf.readByte

@@ -1,6 +1,6 @@
 package wowchat.game
 
-trait GameCommandHandler extends GoldPickerHandler {
+trait GameCommandHandler extends GoldPickerHandler with AutoFloodHandler {
 
   def sendMessageToWow(tp: Byte, message: String, target: Option[String])
   def sendNotification(message: String)

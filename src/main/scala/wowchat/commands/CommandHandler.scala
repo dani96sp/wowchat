@@ -84,6 +84,69 @@ object CommandHandler extends StrictLogging {
     messageChannel.sendMessage(helpMessage).queue()
   }
 
+  private def handleAutoFlood(args: Array[String], messageChannel: MessageChannel): Unit = {
+    val game = Global.game.getOrElse {
+      messageChannel.sendMessage("No hay conexión al juego actualmente.").queue()
+      return
+    }
+
+    if (args.isEmpty) {
+      sendAutoFloodHelp(messageChannel)
+      return
+    }
+
+    args(0).toLowerCase match {
+      case "on" =>
+        game.startAutoFlood()
+        messageChannel.sendMessage("AutoFlood ha sido activado.").queue()
+      case "off" =>
+        game.stopAutoFlood()
+        messageChannel.sendMessage("AutoFlood ha sido desactivado.").queue()
+      case "status" =>
+        messageChannel.sendMessage(game.getAutoFloodStatus).queue()
+      case "msg" =>
+        if (args.length < 2) {
+          messageChannel.sendMessage("Por favor, proporciona un mensaje.").queue()
+        } else {
+          val newMessage = args.tail.mkString(" ")
+          game.setAutoFloodMessage(newMessage)
+          messageChannel.sendMessage(s"Mensaje de AutoFlood actualizado a: $newMessage").queue()
+        }
+      case "delay" =>
+        if (args.length < 2 || !args(1).forall(_.isDigit) || args(1).toInt < 10) {
+          messageChannel.sendMessage("Por favor, proporciona un número válido para el delay. Valor mínimo 10s.").queue()
+        } else {
+          val newDelay = args(1).toInt
+          game.setAutoFloodDelay(newDelay)
+          messageChannel.sendMessage(s"Delay de AutoFlood actualizado a $newDelay segundos.").queue()
+        }
+      case "channels" =>
+        if (args.length < 2) {
+          messageChannel.sendMessage("Por favor, proporciona al menos un canal.").queue()
+        } else {
+          val channels = args.tail.toSet
+          game.setAutoFloodChannels(channels)
+          messageChannel.sendMessage(s"Canales de AutoFlood actualizados a: ${channels.mkString(", ")}").queue()
+        }
+      case "help" | _ =>
+        sendAutoFloodHelp(messageChannel)
+    }
+  }
+
+  private def sendAutoFloodHelp(messageChannel: MessageChannel): Unit = {
+    val helpMessage = """
+                        |Uso del comando AutoFlood:
+                        |?autoflood on - Activa AutoFlood
+                        |?autoflood off - Desactiva AutoFlood
+                        |?autoflood status - Muestra el estado actual de AutoFlood
+                        |?autoflood msg <mensaje> - Establece el mensaje de AutoFlood
+                        |?autoflood delay <num> - Establece el delay en segundos
+                        |?autoflood channels <canales> - Establece los canales (ej: yell say 1 2)
+                        |?autoflood help - Muestra este mensaje de ayuda
+    """.stripMargin
+    messageChannel.sendMessage(helpMessage).queue()
+  }
+
   // returns back the message as an option if unhandled
   // needs to be refactored into a Map[String, <Intelligent Command Handler Function>]
   def apply(fromChannel: MessageChannel, message: String): Boolean = {
@@ -130,10 +193,20 @@ object CommandHandler extends StrictLogging {
             return true
           })(game => {
             handleGoldPicker(args, fromChannel)
-            return true
+            None
           })
+        case "autoflood" =>
+          Global.game.fold({
+            fromChannel.sendMessage(NOT_ONLINE).queue()
+            return true
+          })(game => {
+            handleAutoFlood(args, fromChannel)
+            None
+          })
+        case _ => Some(message)
       }
     }.fold(throwable => {
+      logger.error(s"Error handling command: $message")
       // command not found, should send to wow chat
       false
     }, opt => {

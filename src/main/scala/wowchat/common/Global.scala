@@ -2,12 +2,10 @@ package wowchat.common
 
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
-
 import io.netty.channel.EventLoopGroup
 import net.dv8tion.jda.api.entities.TextChannel
 import wowchat.discord.Discord
-import wowchat.game.GameCommandHandler
-import wowchat.game.GoldPickerHandler
+import wowchat.game.{AutoFloodHandler, GameCommandHandler, GoldPickerHandler}
 
 import scala.collection.mutable
 
@@ -17,7 +15,7 @@ object Global {
   var config: WowChatConfig = _
 
   var discord: Discord = _
-  var game: Option[GameCommandHandler with GoldPickerHandler] = None
+  var game: Option[GameCommandHandler with GoldPickerHandler with AutoFloodHandler] = None
 
   val discordToWow = new mutable.HashMap[String, mutable.Set[WowChannelConfig]]
     with mutable.MultiMap[String, WowChannelConfig]
