@@ -944,9 +944,9 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
           if (inWorld && _isAutoFloodActive) {
             autoFloodChannels.foreach(channel => {
               channel.toLowerCase match {
-                case "yell" => sendYellMessage(autoFloodMessage)
-                case "say" => sendSayMessage(autoFloodMessage)
-                case channelId => sendChannelMessage(autoFloodMessage, channelId)
+                case "yell" => sendMessageToWow(ChatEvents.CHAT_MSG_YELL, autoFloodMessage, None)
+                case "say" => sendMessageToWow(ChatEvents.CHAT_MSG_SAY, autoFloodMessage, None)
+                case channelId => sendMessageToWow(ChatEvents.CHAT_MSG_CHANNEL, autoFloodMessage, Some(channelId))
               }
             })
             autoFloodFuture = Some(scheduleNextMessage())
@@ -957,29 +957,6 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
     scheduleNextMessage()
   }
 
-  private def sendYellMessage(message: String): Unit = {
-    ctx.foreach { ctx =>
-      val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(200, 400)
-      byteBuf.writeIntLE(ChatEvents.CHAT_MSG_YELL)
-      byteBuf.writeIntLE(languageId)
-      byteBuf.writeBytes(message.getBytes("UTF-8"))
-      byteBuf.writeByte(0)
-      ctx.writeAndFlush(Packet(CMSG_MESSAGECHAT, byteBuf))
-    }
-  }
-
-  private def sendChannelMessage(message: String, channelName: String): Unit = {
-    ctx.foreach { ctx =>
-      val byteBuf = PooledByteBufAllocator.DEFAULT.buffer(200, 400)
-      byteBuf.writeIntLE(ChatEvents.CHAT_MSG_CHANNEL)
-      byteBuf.writeIntLE(languageId)
-      byteBuf.writeBytes(channelName.getBytes("UTF-8"))
-      byteBuf.writeByte(0)
-      byteBuf.writeBytes(message.getBytes("UTF-8"))
-      byteBuf.writeByte(0)
-      ctx.writeAndFlush(Packet(CMSG_MESSAGECHAT, byteBuf))
-    }
-  }
 
   private def handle_SMSG_TRADE_STATUS(msg: Packet): Unit = {
     val id = msg.byteBuf.readByte
