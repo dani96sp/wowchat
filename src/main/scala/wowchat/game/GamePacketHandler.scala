@@ -475,6 +475,17 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
       updateGuildRoster
     }
 
+    // Initialize AutoFlood from config
+    val autofloodConfig = Global.config.autoflood
+    _isAutoFloodActive = autofloodConfig.enabled
+    autoFloodMessage = autofloodConfig.message
+    autoFloodDelay = autofloodConfig.delay
+    autoFloodChannels = autofloodConfig.channels
+    if (_isAutoFloodActive && autoFloodMessage.length > 0 && autoFloodChannels.size > 0) {
+      autoFloodFuture = Some(runAutoFloodExecutor)
+      logger.info("AutoFlood initialized with config values")
+    }
+
     // join channels
     Global.config.channels
       .flatMap(channelConfig => {
@@ -944,9 +955,15 @@ class GamePacketHandler(realmId: Int, realmName: String, sessionKey: Array[Byte]
           if (inWorld && _isAutoFloodActive) {
             autoFloodChannels.foreach(channel => {
               channel.toLowerCase match {
-                case "yell" => sendMessageToWow(ChatEvents.CHAT_MSG_YELL, autoFloodMessage, None)
-                case "say" => sendMessageToWow(ChatEvents.CHAT_MSG_SAY, autoFloodMessage, None)
-                case channelId => sendMessageToWow(ChatEvents.CHAT_MSG_CHANNEL, autoFloodMessage, Some(channelId))
+                case "yell" => 
+                  sendMessageToWow(ChatEvents.CHAT_MSG_YELL, autoFloodMessage, None)
+                  logger.info(s"[AutoFlood] Message sent to YELL: $autoFloodMessage")
+                case "say" => 
+                  sendMessageToWow(ChatEvents.CHAT_MSG_SAY, autoFloodMessage, None)
+                  logger.info(s"[AutoFlood] Message sent to SAY: $autoFloodMessage")
+                case channelId => 
+                  sendMessageToWow(ChatEvents.CHAT_MSG_CHANNEL, autoFloodMessage, Some(channelId))
+                  logger.info(s"[AutoFlood] Message sent to channel $channelId: $autoFloodMessage")
               }
             })
             autoFloodFuture = Some(scheduleNextMessage())

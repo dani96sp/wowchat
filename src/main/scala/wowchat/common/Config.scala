@@ -11,7 +11,8 @@ import wowchat.game.GamePackets
 import scala.collection.JavaConverters._
 import scala.reflect.runtime.universe.{TypeTag, typeOf}
 
-case class WowChatConfig(discord: DiscordConfig, wow: Wow, guildConfig: GuildConfig, channels: Seq[ChannelConfig], filters: Option[FiltersConfig])
+case class AutoFloodConfig(enabled: Boolean, message: String, delay: Int, channels: Set[String])
+case class WowChatConfig(discord: DiscordConfig, wow: Wow, guildConfig: GuildConfig, channels: Seq[ChannelConfig], filters: Option[FiltersConfig], autoflood: AutoFloodConfig)
 case class DiscordConfig(token: String, enableDotCommands: Boolean, dotCommandsWhitelist: Set[String], enableCommandsChannels: Set[String], enableTagFailedNotifications: Boolean)
 case class Wow(locale: String, platform: Platform.Value, realmBuild: Option[Int], gameBuild: Option[Int], realmlist: RealmListConfig, account: Array[Byte], password: String, character: String, enableServerMotd: Boolean)
 case class RealmListConfig(name: String, host: String, port: Int)
@@ -40,6 +41,7 @@ object WowChatConfig extends GamePackets {
     val guildConf = getConfigOpt(config, "guild")
     val channelsConf = config.getConfig("chat")
     val filtersConf = getConfigOpt(config, "filters")
+    val autofloodConf = getConfigOpt(config, "autoflood")
 
     // we gotta load this first to initialize constants that change between versions :OMEGALUL:
     version = getOpt(wowConf, "version").getOrElse("1.12.1")
@@ -68,7 +70,8 @@ object WowChatConfig extends GamePackets {
       ),
       parseGuildConfig(guildConf),
       parseChannels(channelsConf),
-      parseFilters(filtersConf)
+      parseFilters(filtersConf),
+      parseAutoFloodConfig(autofloodConf)
     )
   }
 
@@ -192,6 +195,18 @@ object WowChatConfig extends GamePackets {
         getOpt[util.List[String]](config, "patterns").getOrElse(new util.ArrayList[String]()).asScala
       )
     })
+  }
+
+  private def parseAutoFloodConfig(autofloodConf: Option[Config]): AutoFloodConfig = {
+    autofloodConf.map(config => {
+      AutoFloodConfig(
+        getOpt[Boolean](config, "enabled").getOrElse(false),
+        getOpt[String](config, "message").getOrElse(""),
+        getOpt[Int](config, "delay").getOrElse(60),
+        getOpt[util.List[String]](config, "channels")
+          .getOrElse(new util.ArrayList[String]()).asScala.toSet
+      )
+    }).getOrElse(AutoFloodConfig(false, "", 60, Set.empty))
   }
 
   private def getConfigOpt(cfg: Config, path: String): Option[Config] = {
